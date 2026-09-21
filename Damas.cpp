@@ -1,6 +1,13 @@
-#include <iostream>
+#include "raylib.h"
 
 int main() {
-  std::cout << "Hola mundo!\n";
+  InitWindow(800, 600, "Hola Mundo");
+  while (!WindowShouldClose()) {
+    BeginDrawing();
+    ClearBackground(DARKGRAY);
+    EndDrawing();
+  }
+  CloseWindow();
+  
   return 0;
 }
