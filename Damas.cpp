@@ -20,8 +20,8 @@ class Damas {
     int x, y;
 
     Pos(int _x, int _y) : x{_x}, y{_y} {};
-    Pos(const Vector2 &vec) : x{(int)vec.x}, y{(int)vec.y} {}
-    Pos(const Vector2 &&vec) : x{(int)vec.x}, y{(int)vec.y} {}
+    Pos(Vector2 &vec) : x{(int)vec.x}, y{(int)vec.y} {}
+    Pos(Vector2 &&vec) : x{(int)vec.x}, y{(int)vec.y} {}
 
     bool operator==(Pos &other) { return x == other.x && y == other.y; }
   };
@@ -49,7 +49,7 @@ public:
   }
 
   static inline void HighlightMouse(Vector2 pos, float step) noexcept {
-    const Vector2 mouse = (GetMousePosition() - pos) / step;
+    Vector2 mouse = (GetMousePosition() - pos) / step;
     if (Vector2Clamp(mouse, Vector2Zero(), {7.f, 7.f}) == mouse) {
       const Vector2 mouse_tile = getTilePos(mouse, pos, step);
       DrawRectangle(mouse_tile.x, mouse_tile.y, step, step,
@@ -118,16 +118,29 @@ public:
   }
 };
 
+void DrawTimer(int x, int y, int font_size, float time) {
+  const auto time_text =
+      TextFormat("%02d:%02d", (int)time / 60, (int)time % 60);
+  const auto text_len = MeasureText(time_text, font_size);
+  DrawText(time_text, x - text_len / 2, y, font_size, BLACK);
+}
+
 int main() {
   Damas damas;
 
-  InitWindow(800, 700, "Damas");
+  InitWindow(800, 800, "Damas");
   SetTargetFPS(60);
 
+  const double time_start = GetTime();
   while (!WindowShouldClose()) {
+    const int board_x = 100;
+    const int board_y = 50;
+    const int board_size = 600;
     BeginDrawing();
     ClearBackground(BACKGROUND);
-    damas.Draw(Vector2{100, 50}, 600);
+    DrawTimer(board_x + board_size / 2, board_y + board_size + 20, 80,
+              GetTime() - time_start);
+    damas.Draw({board_x, board_y}, board_size);
     EndDrawing();
   }
   CloseWindow();
