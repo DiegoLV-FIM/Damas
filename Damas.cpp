@@ -1,6 +1,7 @@
 #include "raylib.h"
 #include "raymath.h"
 #include <optional>
+#include <vector>
 
 namespace Colors {
 const inline Color Background = BEIGE;
@@ -11,6 +12,7 @@ const inline Color LightPiece = DARKBLUE;
 const inline Color DarkPiece = MAROON;
 const inline Color PieceBorder = BLACK;
 const inline Color Hover = Fade(BLACK, 0.30f);
+const inline Color Selected = Fade(GOLD, 0.55f);
 }; // namespace Colors
 
 class Pos {
@@ -20,12 +22,19 @@ public:
   bool operator==(const Pos &other) const {
     return x == other.x && y == other.y;
   }
+
+  bool operator!=(const Pos &other) const { return !(*this == other); }
+
+  bool inBounds(Pos hi, Pos lo) const {
+    return x >= hi.x && x < lo.x && y >= hi.y && y < lo.y;
+  };
 };
 
-static inline std::optional<Pos> getMouseTile(Vector2 pos,
+static inline std::optional<Pos> getMouseTile(Vector2 board_pos,
                                               float tile_size) noexcept {
-  const Vector2 mouse = (GetMousePosition() - pos) / tile_size;
-  if (mouse.x < 0.f || mouse.x >= 8.f || mouse.y < 0.f || mouse.y >= 8.f)
+  const Vector2 mouse = (GetMousePosition() - board_pos) / tile_size;
+  const Pos tile = {(int)mouse.x, (int)mouse.y};
+  if (!tile.inBounds({0, 0}, {8, 8}))
     return std::nullopt;
   return Pos{(int)mouse.x, (int)mouse.y};
 }
@@ -44,7 +53,128 @@ class Damas {
   };
 
   Piece pieces[8][8];
-  bool turno_blanco = true;
+  bool white_move = true;
+  std::optional<Pos> selected;
+
+  Piece &getPiece(Pos tile) { return pieces[tile.y][tile.x]; }
+
+  static bool isLightPiece(Piece p) {
+    return p == Piece::Light || p == Piece::QLight;
+  }
+
+  static bool isDarkPiece(Piece p) {
+    return p == Piece::Dark || p == Piece::QDark;
+  }
+
+  static bool isOpponent(Piece p, bool is_white) {
+    return is_white ? isDarkPiece(p) : isLightPiece(p);
+  };
+
+  struct Capture {
+    Pos move_to;
+    Pos captures;
+  };
+
+  std::vector<Capture> getCaptures(Pos from) {
+    std::vector<Capture> captures;
+    const Piece p = getPiece(from);
+    if (p == Piece::Empty)
+      return {};
+
+    const bool is_white = isLightPiece(p);
+    const int dy_dir = is_white ? -1 : 1;
+
+    for (int dx : {-1, 1}) {
+      const Pos over = {from.x + dx, from.y + dy_dir};
+      const Pos to = {over.x + dx, over.y + dy_dir};
+
+      if (!to.inBounds({0, 0}, {8, 8}))
+        continue;
+
+      const Piece over_piece = getPiece(over);
+      if (isOpponent(over_piece, is_white) && getPiece(to) == Piece::Empty) {
+        captures.push_back({to, over});
+      }
+    }
+
+    return captures;
+  }
+
+  bool isValidMove(Pos from, Pos to) {
+    Piece p = getPiece(from);
+    if (p == Piece::Empty)
+      return false;
+    if (!to.inBounds({0, 0}, {8, 8}))
+      return false;
+    if (getPiece(to) != Piece::Empty)
+      return false;
+
+    const int dx = to.x - from.x;
+    const int dy = to.y - from.y;
+    if (std::abs(dx) != 1)
+      return false;
+
+    if (isLightPiece(p))
+      return dy == -1; // white advances toward y == 0
+    if (isDarkPiece(p))
+      return dy == 1; // black advances toward y == 7
+    return false;
+  }
+
+  void HandleClick(Vector2 board_pos, float board_size) noexcept {
+    const auto tile = getMouseTile(board_pos, board_size / 8.f);
+    if (!tile)
+      return;
+
+    Piece &piece = getPiece(*tile);
+    if (selected) {
+      Piece &sel_piece = getPiece(*selected);
+      if (auto captures = getCaptures(*selected); !captures.empty()) {
+        for (const auto &capture : captures) {
+          if (capture.move_to != *tile)
+            continue;
+
+          piece = sel_piece;
+          sel_piece = Piece::Empty;
+
+          Piece &captured = getPiece(capture.captures);
+          captured = Piece::Empty;
+
+          selected = *tile;
+          if (getCaptures(*selected).empty()) {
+            white_move = !white_move;
+            selected = std::nullopt;
+          }
+        }
+        return;
+      }
+
+      if (isValidMove(*selected, *tile)) {
+        piece = sel_piece;
+        sel_piece = Piece::Empty;
+        white_move = !white_move;
+        selected = std::nullopt;
+        return;
+      }
+    }
+
+    switch (piece) {
+    case Piece::Empty:
+      break;
+    case Piece::Light:
+    case Piece::QLight:
+      if (white_move) {
+        selected = tile;
+      }
+      break;
+    case Piece::Dark:
+    case Piece::QDark:
+      if (!white_move) {
+        selected = tile;
+      }
+      break;
+    }
+  }
 
   static inline void DrawTile(Vector2 origin, Pos tile, float tile_size,
                               Color color) noexcept {
@@ -93,9 +223,10 @@ class Damas {
   void DrawAllPieces(Vector2 pos, float tile_size) noexcept {
     for (int y = 0; y < 8; y++) {
       for (int x = 1 - (y % 2); x < 8; x += 2) {
-        const Vector2 tile_pos = getTilePos({x, y}, pos, tile_size);
-        DrawPiece(pieces[y][x], Vector2AddValue(tile_pos, tile_size * .5f),
-                  tile_size * .32f);
+        const Pos tile = {x, y};
+        const Vector2 tile_pos = getTilePos(tile, pos, tile_size);
+        const Vector2 center = Vector2AddValue(tile_pos, tile_size * .5f);
+        DrawPiece(getPiece(tile), center, tile_size * .32f);
       }
     }
   }
@@ -116,7 +247,7 @@ public:
     }
   }
 
-  void Draw(Vector2 pos, float size) noexcept {
+  void DrawBoard(Vector2 pos, float size) noexcept {
     DrawRectangle(pos.x, pos.y, size, size, Colors::LightTile);
     const float tile_size = size / 8.f;
     HighlightMouse(pos, tile_size);
@@ -127,8 +258,18 @@ public:
       }
     }
 
+    if (selected) {
+      DrawTile(pos, *selected, tile_size, Colors::Selected);
+    }
+
     DrawBoardLines(pos, size, tile_size);
     DrawAllPieces(pos, tile_size);
+  }
+
+  void Update(Vector2 board_pos, float board_size) {
+    if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+      HandleClick(board_pos, board_size);
+    }
   }
 };
 
@@ -149,11 +290,13 @@ int main() {
   while (!WindowShouldClose()) {
     const Vector2 board_pos = {100.f, 50.f};
     const float board_size = 600.f;
+    damas.Update(board_pos, board_size);
     BeginDrawing();
     ClearBackground(Colors::Background);
-    DrawTimer(board_pos + Vector2{board_size / 2.f, board_size + 20.f}, 80,
-              GetTime() - time_start);
-    damas.Draw(board_pos, board_size);
+    const Vector2 timer_pos =
+        board_pos + Vector2{board_size / 2.f, board_size + 20.f};
+    DrawTimer(timer_pos, 80, GetTime() - time_start);
+    damas.DrawBoard(board_pos, board_size);
     EndDrawing();
   }
   CloseWindow();
