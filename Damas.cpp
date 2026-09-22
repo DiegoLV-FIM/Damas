@@ -71,19 +71,13 @@ class Damas {
   };
 
   struct Capture {
+    Pos from;
     Pos move_to;
     Pos captures;
   };
 
-  std::vector<Capture> getCaptures(Pos from) {
-    std::vector<Capture> captures;
-    const Piece p = getPiece(from);
-    if (p == Piece::Empty)
-      return {};
-
-    const bool is_white = isLightPiece(p);
+  void getCapturesFrom(Pos from, bool is_white, std::vector<Capture>& captures) {
     const int dy_dir = is_white ? -1 : 1;
-
     for (int dx : {-1, 1}) {
       const Pos over = {from.x + dx, from.y + dy_dir};
       const Pos to = {over.x + dx, over.y + dy_dir};
@@ -93,11 +87,22 @@ class Damas {
 
       const Piece over_piece = getPiece(over);
       if (isOpponent(over_piece, is_white) && getPiece(to) == Piece::Empty) {
-        captures.push_back({to, over});
+        captures.push_back({from, to, over});
       }
     }
+  }
 
-    return captures;
+  void getCaptures(bool is_white, std::vector<Capture>& captures) {
+    for (int y = 0; y < 8; y++) {
+      for (int x = 1 - (y % 2); x < 8; x +=2) {
+        const Pos from = {x,y};
+        const Piece from_piece = getPiece(from);
+        if (white_move ? !isLightPiece(from_piece) : !isDarkPiece(from_piece)) 
+          continue; 
+
+        getCapturesFrom(from, white_move, captures);
+      }
+    }
   }
 
   bool isValidMove(Pos from, Pos to) {
@@ -118,6 +123,7 @@ class Damas {
       return dy == -1; // white advances toward y == 0
     if (isDarkPiece(p))
       return dy == 1; // black advances toward y == 7
+
     return false;
   }
 
@@ -129,8 +135,11 @@ class Damas {
     Piece &piece = getPiece(*tile);
     if (selected) {
       Piece &sel_piece = getPiece(*selected);
-      if (auto captures = getCaptures(*selected); !captures.empty()) {
+      std::vector<Capture> captures;
+      getCaptures(white_move, captures);
+      if (!captures.empty()) {
         for (const auto &capture : captures) {
+          if (capture.from != *selected) continue; 
           if (capture.move_to != *tile)
             continue;
 
@@ -141,15 +150,15 @@ class Damas {
           captured = Piece::Empty;
 
           selected = *tile;
-          if (getCaptures(*selected).empty()) {
+          captures.clear();
+          getCapturesFrom(*selected, white_move, captures);
+          if (captures.empty()) {
             white_move = !white_move;
             selected = std::nullopt;
           }
+          return;
         }
-        return;
-      }
-
-      if (isValidMove(*selected, *tile)) {
+      } else if (isValidMove(*selected, *tile)) {
         piece = sel_piece;
         sel_piece = Piece::Empty;
         white_move = !white_move;
