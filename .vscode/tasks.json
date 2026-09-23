@@ -1,0 +1,57 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build Damas",
+      "type": "shell",
+      "command": "g++",
+      "args": [
+        "-std=c++17",
+        "-Wall",
+        "-Wextra",
+        "-I./raylib-6.0/mingw/include",
+        "Damas.cpp",
+        "-L./raylib-6.0/mingw/lib",
+        "-lraylib",
+        "-lopengl32",
+        "-lgdi32",
+        "-lwinmm",
+        "-o",
+        "Damas.exe"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Run Damas",
+      "type": "shell",
+      "command": "./Damas.exe",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "dependsOn": [
+        "Build Damas"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Clean Damas",
+      "type": "shell",
+      "command": "cmd",
+      "args": [
+        "/c",
+        "del /f /q Damas.exe"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    }
+  ]
+}
