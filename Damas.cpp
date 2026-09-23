@@ -25,6 +25,9 @@ public:
 
   bool operator!=(const Pos &other) const { return !(*this == other); }
 
+  Pos operator+(const Pos& other) const { return {x + other.x, y + other.y}; }
+  Pos operator-(const Pos& other) const { return {x - other.x, y - other.y}; }
+
   bool inBounds(Pos hi, Pos lo) const {
     return x >= hi.x && x < lo.x && y >= hi.y && y < lo.y;
   };
@@ -66,6 +69,10 @@ class Damas {
     return p == Piece::Dark || p == Piece::QDark;
   }
 
+  static bool isQueen(Piece p) {
+    return p == Piece::QLight || p == Piece::QDark;
+  }
+
   static bool isOpponent(Piece p, bool is_white) {
     return is_white ? isDarkPiece(p) : isLightPiece(p);
   };
@@ -79,26 +86,43 @@ class Damas {
   void getCapturesFrom(Pos from, bool is_white, std::vector<Capture>& captures) {
     const int dy_dir = is_white ? -1 : 1;
     for (int dx : {-1, 1}) {
-      const Pos over = {from.x + dx, from.y + dy_dir};
-      const Pos to = {over.x + dx, over.y + dy_dir};
+      if (isQueen(getPiece(from))) {
+        const Pos move = {dx, -dy_dir};
+        const Pos over = from + move;
+        const Pos to = over + move;
 
-      if (!to.inBounds({0, 0}, {8, 8}))
+        if (!to.inBounds({0, 0}, {8, 8}))
+          continue;
+
+        const Piece over_piece = getPiece(over);
+        const Piece to_piece = getPiece(to);
+        if (isOpponent(over_piece, is_white) && to_piece == Piece::Empty) {
+          captures.push_back({from, to, over});
+        }
+      }
+
+      const Pos move = {dx, dy_dir};
+      const Pos over = from + move;
+      const Pos to = over + move;
+
+      if (!to.inBounds({0, 0}, {8, 8})) 
         continue;
 
       const Piece over_piece = getPiece(over);
-      if (isOpponent(over_piece, is_white) && getPiece(to) == Piece::Empty) {
+      const Piece to_piece = getPiece(to);
+      if (isOpponent(over_piece, is_white) && to_piece == Piece::Empty) {
         captures.push_back({from, to, over});
       }
     }
   }
 
-  void getCaptures(bool is_white, std::vector<Capture>& captures) {
+  void getCaptures(std::vector<Capture>& captures) {
     for (int y = 0; y < 8; y++) {
       for (int x = 1 - (y % 2); x < 8; x +=2) {
-        const Pos from = {x,y};
+        const Pos from = {x, y};
         const Piece from_piece = getPiece(from);
         if (white_move ? !isLightPiece(from_piece) : !isDarkPiece(from_piece)) 
-          continue; 
+          continue;
 
         getCapturesFrom(from, white_move, captures);
       }
@@ -115,16 +139,66 @@ class Damas {
       return false;
 
     const int dx = to.x - from.x;
-    const int dy = to.y - from.y;
     if (std::abs(dx) != 1)
       return false;
 
+    const int dy = to.y - from.y;
+    if (isQueen(p))
+      return std::abs(dy) == 1;
+
     if (isLightPiece(p))
       return dy == -1; // white advances toward y == 0
-    if (isDarkPiece(p))
+    else
       return dy == 1; // black advances toward y == 7
+  }
 
-    return false;
+  void movePiece(Piece& from, Piece& to, Pos tile) {
+    if (isLightPiece(from) && tile.y == 0) {
+      to = Piece::QLight;
+    } else if (isDarkPiece(from) && tile.y == 7) {
+      to = Piece::QDark;
+    } else {
+      to = from;
+    }
+    from = Piece::Empty;
+  }
+
+  bool HandleMove(Pos tile, Piece& piece) {
+    Piece &sel_piece = getPiece(*selected);
+    
+    std::vector<Capture> captures;
+    getCaptures(captures);
+    if (!captures.empty()) {
+      for (const auto &capture : captures) {
+        if (capture.from != *selected) continue; 
+        if (capture.move_to != tile)
+          continue;
+
+        movePiece(sel_piece, piece, tile);
+        Piece &captured = getPiece(capture.captures);
+        captured = Piece::Empty;
+
+        selected = tile;
+        captures.clear();
+        getCapturesFrom(*selected, white_move, captures);
+        if (captures.empty()) {
+          white_move = !white_move;
+          selected = std::nullopt;
+        }
+        
+        return true;
+      }
+
+      return false;
+    } 
+    
+    if (!isValidMove(*selected, tile))
+      return false;
+    
+    movePiece(sel_piece, piece, tile);
+    white_move = !white_move;
+    selected = std::nullopt;
+    return true;
   }
 
   void HandleClick(Vector2 board_pos, float board_size) noexcept {
@@ -133,55 +207,12 @@ class Damas {
       return;
 
     Piece &piece = getPiece(*tile);
-    if (selected) {
-      Piece &sel_piece = getPiece(*selected);
-      std::vector<Capture> captures;
-      getCaptures(white_move, captures);
-      if (!captures.empty()) {
-        for (const auto &capture : captures) {
-          if (capture.from != *selected) continue; 
-          if (capture.move_to != *tile)
-            continue;
+    if (selected && HandleMove(*tile, piece)) return;
 
-          piece = sel_piece;
-          sel_piece = Piece::Empty;
-
-          Piece &captured = getPiece(capture.captures);
-          captured = Piece::Empty;
-
-          selected = *tile;
-          captures.clear();
-          getCapturesFrom(*selected, white_move, captures);
-          if (captures.empty()) {
-            white_move = !white_move;
-            selected = std::nullopt;
-          }
-          return;
-        }
-      } else if (isValidMove(*selected, *tile)) {
-        piece = sel_piece;
-        sel_piece = Piece::Empty;
-        white_move = !white_move;
-        selected = std::nullopt;
-        return;
-      }
-    }
-
-    switch (piece) {
-    case Piece::Empty:
-      break;
-    case Piece::Light:
-    case Piece::QLight:
-      if (white_move) {
-        selected = tile;
-      }
-      break;
-    case Piece::Dark:
-    case Piece::QDark:
-      if (!white_move) {
-        selected = tile;
-      }
-      break;
+    if (white_move && isLightPiece(piece)) {
+      selected = tile;
+    } else if (!white_move && isDarkPiece(piece)) {
+      selected = tile;
     }
   }
 
@@ -211,22 +242,16 @@ class Damas {
     };
   }
 
-  static void DrawPiece(Piece tile, Vector2 center, float radius) noexcept {
-    Color color;
-    switch (tile) {
-    case Piece::Empty:
-      return;
-    case Piece::QLight:
-    case Piece::Light:
-      color = Colors::LightPiece;
-      break;
-    case Piece::QDark:
-    case Piece::Dark:
-      color = Colors::DarkPiece;
-      break;
-    }
+  static void DrawPiece(Piece p, Vector2 center, float radius) noexcept {
+    if (p == Piece::Empty) return;
+    Color color = isLightPiece(p) ? Colors::LightPiece : Colors::DarkPiece;
     DrawCircleV(center, radius, Colors::PieceBorder);
     DrawCircleV(center, radius - 4.f, color);
+    DrawCircleV(center, radius / 1.5f, Fade(BLACK, .2f));
+
+    if (isQueen(p)) {
+      DrawCircleV(center, radius - 4.f, Fade(BLACK, 0.5f));
+    }
   }
 
   void DrawAllPieces(Vector2 pos, float tile_size) noexcept {
