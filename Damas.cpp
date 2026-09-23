@@ -1,7 +1,8 @@
 #include "raylib.h"
 #include "raymath.h"
+#include <array>
 #include <optional>
-#include <vector>
+#include <stdexcept>
 
 namespace Colors {
 const inline Color Background = BEIGE;
@@ -15,6 +16,8 @@ const inline Color Hover = Fade(BLACK, 0.30f);
 const inline Color Selected = Fade(GOLD, 0.55f);
 }; // namespace Colors
 
+class Pos;
+
 class Pos {
 public:
   int x, y;
@@ -22,210 +25,259 @@ public:
   bool operator==(const Pos &other) const {
     return x == other.x && y == other.y;
   }
-
   bool operator!=(const Pos &other) const { return !(*this == other); }
 
-  Pos operator+(const Pos& other) const { return {x + other.x, y + other.y}; }
-  Pos operator-(const Pos& other) const { return {x - other.x, y - other.y}; }
+  Pos operator+(const Pos &other) const { return {x + other.x, y + other.y}; }
+  Pos operator-(const Pos &other) const { return {x - other.x, y - other.y}; }
+  Pos operator/(int scalar) const { return {x / scalar, y / scalar}; }
 
   bool inBounds(Pos hi, Pos lo) const {
     return x >= hi.x && x < lo.x && y >= hi.y && y < lo.y;
   };
+
+  Vector2 toScreenPos(Vector2 origin, float size) const {
+    return origin + Vector2{(float)x, (float)y} * size;
+  }
 };
 
-static inline std::optional<Pos> getMouseTile(Vector2 board_pos,
-                                              float tile_size) noexcept {
-  const Vector2 mouse = (GetMousePosition() - board_pos) / tile_size;
-  const Pos tile = {(int)mouse.x, (int)mouse.y};
-  if (!tile.inBounds({0, 0}, {8, 8}))
-    return std::nullopt;
-  return Pos{(int)mouse.x, (int)mouse.y};
-}
+struct Capture {
+  Pos from;
+  Pos move_to;
+  Pos move_over;
 
-static inline Vector2 getTilePos(Pos tile, Vector2 pos, float size) noexcept {
-  return pos + Vector2{(float)tile.x, (float)tile.y} * size;
-}
+  static Capture fromTo(Pos from, Pos to) {
+    return {from, to, from + (to - from) / 2};
+  }
+};
 
-class Damas {
-  enum class Piece {
-    Empty,
-    Light,
-    QLight,
-    Dark,
-    QDark,
+class Board {
+public:
+  struct Piece {
+    enum class Kind { Empty, Light, Dark };
+    Kind color;
+    Pos pos;
+    bool is_queen = false;
+
+    Piece(Kind color = Kind::Empty, Pos pos = {0, 0}, bool is_queen = false)
+        : color(color), pos(pos), is_queen(is_queen) {}
+
+    bool isLight() const { return color == Kind::Light; }
+    bool isDark() const { return color == Kind::Dark; }
+
+    bool isOponent(Piece::Kind other) const {
+      return color != other && other != Piece::Kind::Empty;
+    }
+
+    void Draw(Vector2 center, float radius) const noexcept {
+      if (color == Piece::Kind::Empty)
+        return;
+
+      Color color = isLight() ? Colors::LightPiece : Colors::DarkPiece;
+      DrawCircleV(center, radius, Colors::PieceBorder);
+      DrawCircleV(center, radius - 4.f, color);
+      DrawCircleV(center, radius / 1.5f, Fade(BLACK, .2f));
+
+      if (is_queen) {
+        DrawCircleV(center, radius - 4.f, Fade(BLACK, 0.5f));
+      }
+    }
   };
 
-  Piece pieces[8][8];
-  bool white_move = true;
-  std::optional<Pos> selected;
+  Board() noexcept {
+    for (int y = 0; y < 8; y++) {
+      for (int x = 0; x < 8; x++) {
+        pieces[y][x] = {Piece::Kind::Empty, {x, y}, false};
+        if ((x + y) % 2 != 1)
+          continue;
 
-  Piece &getPiece(Pos tile) { return pieces[tile.y][tile.x]; }
-
-  static bool isLightPiece(Piece p) {
-    return p == Piece::Light || p == Piece::QLight;
+        if (y < 3)
+          pieces[y][x].color = Piece::Kind::Dark;
+        else if (y >= 5)
+          pieces[y][x].color = Piece::Kind::Light;
+      }
+    }
   }
 
-  static bool isDarkPiece(Piece p) {
-    return p == Piece::Dark || p == Piece::QDark;
+  void Draw(Vector2 pos, float size, std::optional<Pos> highlight,
+            std::optional<Pos> selected) const noexcept {
+    DrawRectangle(pos.x, pos.y, size, size, Colors::LightTile);
+    const float tile_size = size / 8.f;
+
+    if (highlight) {
+      DrawTile(pos, *highlight, tile_size, Colors::Hover);
+    }
+
+    for (int y = 0; y < 8; y++) {
+      for (int x = y % 2; x < 8; x += 2) {
+        DrawTile(pos, {x, y}, tile_size, Colors::DarkTile);
+      }
+    }
+
+    if (selected) {
+      DrawTile(pos, *selected, tile_size, Colors::Selected);
+    }
+
+    DrawBoardLines(pos, size, tile_size);
+    DrawAllPieces(pos, tile_size);
   }
 
-  static bool isQueen(Piece p) {
-    return p == Piece::QLight || p == Piece::QDark;
+  const Piece &operator[](Pos tile) const noexcept {
+    return pieces[tile.y][tile.x];
   }
 
-  static bool isOpponent(Piece p, bool is_white) {
-    return is_white ? isDarkPiece(p) : isLightPiece(p);
-  };
+  bool hasCaptures() const noexcept {
+    for (int y = 0; y < 8; y++) {
+      for (int x = 1 - (y % 2); x < 8; x += 2) {
+        const Pos from = {x, y};
+        if (get(from).color != turn())
+          continue;
 
-  struct Capture {
-    Pos from;
-    Pos move_to;
-    Pos captures;
-  };
+        if (hasCaptures(from))
+          return true;
+      }
+    }
+    return false;
+  }
 
-  void getCapturesFrom(Pos from, bool is_white, std::vector<Capture>& captures) {
-    const int dy_dir = is_white ? -1 : 1;
+  bool hasCaptures(Pos from) const noexcept {
+    if (!from.inBounds({0, 0}, {8, 8}))
+      return false;
+
     for (int dx : {-1, 1}) {
-      if (isQueen(getPiece(from))) {
-        const Pos move = {dx, -dy_dir};
+      for (int dy : {-1, 1}) {
+        const Pos move = {dx, dy};
         const Pos over = from + move;
         const Pos to = over + move;
-
-        if (!to.inBounds({0, 0}, {8, 8}))
-          continue;
-
-        const Piece over_piece = getPiece(over);
-        const Piece to_piece = getPiece(to);
-        if (isOpponent(over_piece, is_white) && to_piece == Piece::Empty) {
-          captures.push_back({from, to, over});
+        if (validCapture({from, to, over})) {
+          return true;
         }
       }
-
-      const Pos move = {dx, dy_dir};
-      const Pos over = from + move;
-      const Pos to = over + move;
-
-      if (!to.inBounds({0, 0}, {8, 8})) 
-        continue;
-
-      const Piece over_piece = getPiece(over);
-      const Piece to_piece = getPiece(to);
-      if (isOpponent(over_piece, is_white) && to_piece == Piece::Empty) {
-        captures.push_back({from, to, over});
-      }
     }
+
+    return false;
   }
 
-  void getCaptures(std::vector<Capture>& captures) {
-    for (int y = 0; y < 8; y++) {
-      for (int x = 1 - (y % 2); x < 8; x +=2) {
-        const Pos from = {x, y};
-        const Piece from_piece = getPiece(from);
-        if (white_move ? !isLightPiece(from_piece) : !isDarkPiece(from_piece)) 
-          continue;
-
-        getCapturesFrom(from, white_move, captures);
-      }
-    }
-  }
-
-  bool isValidMove(Pos from, Pos to) {
-    Piece p = getPiece(from);
-    if (p == Piece::Empty)
+  bool validCapture(Capture c) const noexcept {
+    if (!c.from.inBounds({0, 0}, {8, 8}) ||
+        !c.move_to.inBounds({0, 0}, {8, 8}) ||
+        !c.move_over.inBounds({0, 0}, {8, 8}))
       return false;
+
+    const Piece piece = get(c.from);
+    if (std::abs(c.move_to.x - c.from.x) != 2)
+      return false;
+
+    const int dy = c.move_to.y - c.from.y;
+    if (!piece.is_queen) {
+      if (piece.isLight() && dy != -2)
+        return false;
+      else if (piece.isDark() && dy != 2)
+        return false;
+
+    } else if (std::abs(dy) != 2) {
+      return false;
+    }
+
+    const Piece over = get(c.move_over);
+    const Piece to = get(c.move_to);
+
+    if (to.color != Piece::Kind::Empty)
+      return false;
+
+    return piece.isOponent(over.color);
+  }
+
+  void capture(Capture c) {
+    if (!validCapture(c))
+      throw std::invalid_argument("Invalid capture");
+
+    Piece &over_piece = get(c.move_over);
+    moveUnchecked(c.from, c.move_to);
+    over_piece.color = Piece::Kind::Empty;
+    over_piece.is_queen = false;
+
+    if (!hasCaptures(c.move_to)) {
+      white_move = !white_move;
+    }
+  }
+
+  bool validMove(Pos from, Pos to) const noexcept {
+    if (hasCaptures())
+      return false;
+
+    if (!from.inBounds({0, 0}, {8, 8}) || !to.inBounds({0, 0}, {8, 8}))
+      return false;
+
+    if (get(from).color != turn())
+      return false;
+
+    Piece p = get(from);
+    if (p.color == Piece::Kind::Empty)
+      return false;
+
     if (!to.inBounds({0, 0}, {8, 8}))
       return false;
-    if (getPiece(to) != Piece::Empty)
+
+    if (get(to).color != Piece::Kind::Empty)
       return false;
 
-    const int dx = to.x - from.x;
+    int dx = to.x - from.x;
     if (std::abs(dx) != 1)
       return false;
 
-    const int dy = to.y - from.y;
-    if (isQueen(p))
+    int dy = to.y - from.y;
+    if (p.is_queen)
       return std::abs(dy) == 1;
 
-    if (isLightPiece(p))
+    if (p.isLight())
       return dy == -1; // white advances toward y == 0
-    else
+    else if (p.isDark())
       return dy == 1; // black advances toward y == 7
+
+    return false;
   }
 
-  void movePiece(Piece& from, Piece& to, Pos tile) {
-    if (isLightPiece(from) && tile.y == 0) {
-      to = Piece::QLight;
-    } else if (isDarkPiece(from) && tile.y == 7) {
-      to = Piece::QDark;
-    } else {
-      to = from;
-    }
-    from = Piece::Empty;
-  }
+  void move(Pos from, Pos to) {
+    if (hasCaptures())
+      throw std::invalid_argument("Must capture if possible");
 
-  bool HandleMove(Pos tile, Piece& piece) {
-    Piece &sel_piece = getPiece(*selected);
-    
-    std::vector<Capture> captures;
-    getCaptures(captures);
-    if (!captures.empty()) {
-      for (const auto &capture : captures) {
-        if (capture.from != *selected) continue; 
-        if (capture.move_to != tile)
-          continue;
+    if (!validMove(from, to))
+      throw std::invalid_argument("Invalid move");
 
-        movePiece(sel_piece, piece, tile);
-        Piece &captured = getPiece(capture.captures);
-        captured = Piece::Empty;
-
-        selected = tile;
-        captures.clear();
-        getCapturesFrom(*selected, white_move, captures);
-        if (captures.empty()) {
-          white_move = !white_move;
-          selected = std::nullopt;
-        }
-        
-        return true;
-      }
-
-      return false;
-    } 
-    
-    if (!isValidMove(*selected, tile))
-      return false;
-    
-    movePiece(sel_piece, piece, tile);
+    moveUnchecked(from, to);
     white_move = !white_move;
-    selected = std::nullopt;
-    return true;
   }
 
-  void HandleClick(Vector2 board_pos, float board_size) noexcept {
-    const auto tile = getMouseTile(board_pos, board_size / 8.f);
-    if (!tile)
-      return;
+  Piece::Kind turn() const noexcept {
+    return white_move ? Piece::Kind::Light : Piece::Kind::Dark;
+  }
 
-    Piece &piece = getPiece(*tile);
-    if (selected && HandleMove(*tile, piece)) return;
+private:
+  Piece &get(Pos tile) noexcept { return pieces[tile.y][tile.x]; }
+  const Piece &get(Pos tile) const noexcept { return pieces[tile.y][tile.x]; }
+  void moveUnchecked(Pos from, Pos to) noexcept {
+    Piece &from_piece = get(from);
+    Piece &to_piece = get(to);
 
-    if (white_move && isLightPiece(piece)) {
-      selected = tile;
-    } else if (!white_move && isDarkPiece(piece)) {
-      selected = tile;
+    to_piece.color = from_piece.color;
+    to_piece.is_queen = from_piece.is_queen;
+    if (from_piece.color == Piece::Kind::Light && to.y == 0) {
+      to_piece.is_queen = true;
+    } else if (from_piece.color == Piece::Kind::Dark && to.y == 7) {
+      to_piece.is_queen = true;
     }
+
+    from_piece.color = Piece::Kind::Empty;
+    from_piece.is_queen = false;
   }
+
+  std::array<std::array<Piece, 8>, 8> pieces;
+  bool white_move = true;
 
   static inline void DrawTile(Vector2 origin, Pos tile, float tile_size,
                               Color color) noexcept {
-    const Vector2 tile_pos = getTilePos(tile, origin, tile_size);
+    const Vector2 tile_pos = tile.toScreenPos(origin, tile_size);
     DrawRectangle(tile_pos.x, tile_pos.y, tile_size, tile_size, color);
-  }
-
-  static inline void HighlightMouse(Vector2 pos, float tile_size) noexcept {
-    if (auto tile = getMouseTile(pos, tile_size)) {
-      DrawTile(pos, *tile, tile_size, Colors::Hover);
-    }
   }
 
   static void DrawBoardLines(Vector2 pos, float size,
@@ -242,72 +294,82 @@ class Damas {
     };
   }
 
-  static void DrawPiece(Piece p, Vector2 center, float radius) noexcept {
-    if (p == Piece::Empty) return;
-    Color color = isLightPiece(p) ? Colors::LightPiece : Colors::DarkPiece;
-    DrawCircleV(center, radius, Colors::PieceBorder);
-    DrawCircleV(center, radius - 4.f, color);
-    DrawCircleV(center, radius / 1.5f, Fade(BLACK, .2f));
-
-    if (isQueen(p)) {
-      DrawCircleV(center, radius - 4.f, Fade(BLACK, 0.5f));
-    }
-  }
-
-  void DrawAllPieces(Vector2 pos, float tile_size) noexcept {
+  void DrawAllPieces(Vector2 pos, float tile_size) const noexcept {
     for (int y = 0; y < 8; y++) {
       for (int x = 1 - (y % 2); x < 8; x += 2) {
         const Pos tile = {x, y};
-        const Vector2 tile_pos = getTilePos(tile, pos, tile_size);
+        const Vector2 tile_pos = tile.toScreenPos(pos, tile_size);
         const Vector2 center = Vector2AddValue(tile_pos, tile_size * .5f);
-        DrawPiece(getPiece(tile), center, tile_size * .32f);
+        get(tile).Draw(center, tile_size * .32f);
       }
+    }
+  }
+};
+
+std::optional<Pos> getMousePos(Vector2 board_pos, float tile_size) noexcept {
+  const Vector2 mouse = (GetMousePosition() - board_pos) / tile_size;
+  const Pos tile = {(int)mouse.x, (int)mouse.y};
+  if (!tile.inBounds({0, 0}, {8, 8})) {
+    return std::nullopt;
+  }
+  return tile;
+}
+
+class Damas {
+  Board board;
+  std::optional<Pos> selected;
+
+  bool HandleMove(Pos to) noexcept {
+    const Pos from = *selected;
+    const Capture capture = Capture::fromTo(from, to);
+    if (board.validCapture(capture)) {
+      board.capture(capture);
+
+      if (board.hasCaptures(to)) {
+        selected = to;
+      } else {
+        selected = std::nullopt;
+      }
+
+      return true;
+    }
+
+    if (!board.validMove(*selected, to))
+      return false;
+
+    board.move(*selected, to);
+    selected = std::nullopt;
+    return true;
+  }
+
+  void HandleClick(Vector2 board_pos, float board_size) noexcept {
+    const auto tile = getMousePos(board_pos, board_size / 8.f);
+    if (!tile)
+      return;
+
+    if (selected && HandleMove(*tile))
+      return;
+
+    const Board::Piece &piece = board[*tile];
+    if (board.turn() == piece.color) {
+      selected = tile;
     }
   }
 
 public:
-  Damas() noexcept {
-    for (int y = 0; y < 8; y++) {
-      for (int x = 0; x < 8; x++) {
-        pieces[y][x] = Piece::Empty;
-        if ((x + y) % 2 != 1)
-          continue;
-
-        if (y < 3)
-          pieces[y][x] = Piece::Dark;
-        else if (y >= 5)
-          pieces[y][x] = Piece::Light;
-      }
-    }
+  void Draw(Vector2 board_pos, float board_size) const noexcept {
+    board.Draw(board_pos, board_size, getMousePos(board_pos, board_size / 8.f),
+               selected);
   }
 
-  void DrawBoard(Vector2 pos, float size) noexcept {
-    DrawRectangle(pos.x, pos.y, size, size, Colors::LightTile);
-    const float tile_size = size / 8.f;
-    HighlightMouse(pos, tile_size);
-
-    for (int y = 0; y < 8; y++) {
-      for (int x = y % 2; x < 8; x += 2) {
-        DrawTile(pos, {x, y}, tile_size, Colors::DarkTile);
-      }
-    }
-
-    if (selected) {
-      DrawTile(pos, *selected, tile_size, Colors::Selected);
-    }
-
-    DrawBoardLines(pos, size, tile_size);
-    DrawAllPieces(pos, tile_size);
-  }
-
-  void Update(Vector2 board_pos, float board_size) {
+  void Update(Vector2 board_pos, float board_size) noexcept {
     if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
       HandleClick(board_pos, board_size);
     }
   }
 };
 
-void DrawTimer(Vector2 pos, int font_size, float time) {
+void DrawTimer(Vector2 pos, int font_size, float time) noexcept {
   const auto time_text =
       TextFormat("%02d:%02d", (int)time / 60, (int)time % 60);
   const int text_len = MeasureText(time_text, font_size);
@@ -320,17 +382,18 @@ int main() {
   InitWindow(800, 800, "Damas");
   SetTargetFPS(60);
 
+  const Vector2 board_pos = {100.f, 50.f};
+  const float board_size = 600.f;
+  const Vector2 timer_pos =
+      board_pos + Vector2{board_size / 2.f, board_size + 20.f};
+
   const double time_start = GetTime();
   while (!WindowShouldClose()) {
-    const Vector2 board_pos = {100.f, 50.f};
-    const float board_size = 600.f;
     damas.Update(board_pos, board_size);
     BeginDrawing();
     ClearBackground(Colors::Background);
-    const Vector2 timer_pos =
-        board_pos + Vector2{board_size / 2.f, board_size + 20.f};
     DrawTimer(timer_pos, 80, GetTime() - time_start);
-    damas.DrawBoard(board_pos, board_size);
+    damas.Draw(board_pos, board_size);
     EndDrawing();
   }
   CloseWindow();
